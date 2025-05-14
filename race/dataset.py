@@ -1,76 +1,64 @@
-import tarfile
-import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
 import cv2
 import numpy as np
 import scipy.io
 import os
-import h5py
-
-cache_path = "imdb_cache.h5"
-
 
 class IMDBDataset(Dataset):
-    def __init__(self, tar_path, limit=999999999):
-        with tarfile.open(tar_path, "r") as tar:
-            mat_data = scipy.io.loadmat(tar.extractfile("imdb_crop/imdb.mat"))
-            num_samples = len(mat_data["imdb"][0][0][0][0])
+    def __init__(self, mat_file, root_dir, limit=None):
+        mat_data = scipy.io.loadmat(mat_file)
+        num_samples = len(mat_data["imdb"][0][0][0][0])
 
-            self.num_samples = min(limit, num_samples)
+        self.root_dir = root_dir
+        self.num_samples = num_samples if limit == None else limit
 
-            if not (
-                os.path.exists(cache_path)
-                and self.num_samples <= (h5 := h5py.File(cache_path, "r")).attrs["num_samples"]
-            ):
-                self._create_cache(tar, mat_data)
-            else:
-                h5.close()
+        self.transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                               std=[0.229, 0.224, 0.225])
+        ])
 
-            self.h5 = h5py.File(cache_path, "r")
+        self.ages = np.zeros(self.num_samples, dtype=int)
+        self.img_paths = [None] * self.num_samples
+        self.celeb_ids = np.zeros(self.num_samples, dtype=int)
 
-    def _create_cache(self, tar, mat_data):
-        with h5py.File(cache_path, "w") as h5:
-            h5.attrs["num_samples"] = self.num_samples
-            images = h5.create_dataset(
-                "images", shape=(self.num_samples, 512, 512, 3), dtype=np.uint8
-            )
-            ages = h5.create_dataset("ages", shape=(self.num_samples,), dtype=np.int32)
-            celeb_ids = h5.create_dataset("celeb_ids", shape=(self.num_samples,), dtype=np.int32)
-
-            for i in range(self.num_samples):
-                dob = mat_data["imdb"][0][0][0][0][i]
-                photo_taken = mat_data["imdb"][0][0][1][0][i]
-                img_path = mat_data["imdb"][0][0][2][0][i][0]
-                celeb_id = mat_data["imdb"][0][0][9][0][i]
-
-                images[i] = pad(
-                    cv2.imdecode(
-                        np.frombuffer(
-                            tar.extractfile("imdb_crop/" + img_path).read(), np.uint8
-                        ),
-                        cv2.IMREAD_ANYCOLOR,
-                    )
-                )
-                ages[i] = photo_taken - dob // 365.25
-                celeb_ids[i] = celeb_id
+        for i in range(self.num_samples):
+            dob = mat_data["imdb"][0][0][0][0][i]
+            photo_taken = mat_data["imdb"][0][0][1][0][i]
+            self.img_paths[i] = mat_data["imdb"][0][0][2][0][i][0]
+            self.celeb_ids[i] = mat_data["imdb"][0][0][9][0][i]
+            
+            self.ages[i] = photo_taken - dob // 365.25
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
-        img = self.h5["images"][idx]
-        age = self.h5["ages"][idx]
-        celeb_id = self.h5["celeb_ids"][idx]
+        img_path = os.path.join(self.root_dir, self.img_paths[idx])
+        img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img = pad(img)
+        img = img.astype(np.float32) / 255.0
 
-        return (
-            torch.from_numpy(img).permute(2, 0, 1).float(),
-            torch.tensor(age, dtype=torch.int),
-            torch.tensor(celeb_id, dtype=torch.int),
-        )
-
-    def __del__(self):
-        self.h5.close()
-
+        if img.ndim == 3:
+            img = np.transpose(img, (2, 0, 1))  # HWC -> CHW
+        
+        age_class = age_to_class(self.ages[idx])
+        
+        return img, age_class
+        
+def age_to_class(age):
+    if age <= 13:
+        return 0
+    elif age <= 26:
+        return 1
+    elif age <= 39:
+        return 2
+    elif age <= 52:
+        return 3
+    else:
+        return 4
 
 def pad(img, target_size=512):
     height, width = img.shape[:2]
