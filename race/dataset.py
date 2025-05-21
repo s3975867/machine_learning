@@ -1,5 +1,8 @@
+from torchvision.datasets import CIFAR100
+import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
+
 import cv2
 import numpy as np
 import scipy.io
@@ -38,7 +41,7 @@ class IMDBDataset(Dataset):
         img_path = os.path.join(self.root_dir, self.img_paths[idx])
         img = cv2.imread(img_path, cv2.IMREAD_COLOR)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = pad(img)
+        img = resize_with_pad(img, (224, 224), (0, 0, 0))
         img = img.astype(np.float32) / 255.0
 
         if img.ndim == 3:
@@ -60,21 +63,35 @@ def age_to_class(age):
     else:
         return 4
 
-def pad(img, target_size=512):
-    height, width = img.shape[:2]
+def resize_with_pad(image, new_shape, padding_color):
+    original_shape = (image.shape[1], image.shape[0])
+    ratio = float(max(new_shape))/max(original_shape)
+    new_size = tuple([int(x*ratio) for x in original_shape])
+    image = cv2.resize(image, new_size)
+    delta_w = new_shape[0] - new_size[0]
+    delta_h = new_shape[1] - new_size[1]
+    top, bottom = delta_h//2, delta_h-(delta_h//2)
+    left, right = delta_w//2, delta_w-(delta_w//2)
+    image = cv2.copyMakeBorder(image, top, bottom, left, right, cv2.BORDER_CONSTANT, value=padding_color)
+    return image
 
-    square_img = np.zeros((target_size, target_size, 3), dtype=np.uint8)
+class UnLearningData(Dataset):
+    def __init__(self, forget_data, retain_data):
+        super().__init__()
+        self.forget_data = forget_data
+        self.retain_data = retain_data
+        self.forget_len = len(forget_data)
+        self.retain_len = len(retain_data)
 
-    ratio = min(target_size / width, target_size / height)
-    new_width = int(width * ratio)
-    new_height = int(height * ratio)
-    resized_img = cv2.resize(img, (new_width, new_height))
-
-    x_offset = (target_size - new_width) // 2
-    y_offset = (target_size - new_height) // 2
-
-    square_img[y_offset : y_offset + new_height, x_offset : x_offset + new_width] = (
-        resized_img
-    )
-
-    return square_img
+    def __len__(self):
+        return self.retain_len + self.forget_len
+    
+    def __getitem__(self, index):
+        if(index < self.forget_len):
+            x = self.forget_data[index][0]
+            y = 1
+            return x,y
+        else:
+            x = self.retain_data[index - self.forget_len][0]
+            y = 0
+            return x,y
