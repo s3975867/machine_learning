@@ -20,20 +20,45 @@ def validation_step(model, batch, device):
     out = model(images)                    # Generate predictions
     loss = F.cross_entropy(out, clabels)   # Calculate loss
     acc = accuracy(out, clabels)           # Calculate accuracy
-    return {'Loss': loss.detach(), 'Acc': acc}
+    
+    # Get predicted classes for distribution tracking
+    preds = torch.argmax(out, dim=1)
+    
+    return {'Loss': loss.detach(), 'Acc': acc, 'Preds': preds.cpu(), 'Labels': clabels.cpu()}
 
 def validation_epoch_end(model, outputs):
     batch_losses = [x['Loss'] for x in outputs]
     epoch_loss = torch.stack(batch_losses).mean()   # Combine losses
     batch_accs = [x['Acc'] for x in outputs]
     epoch_acc = torch.stack(batch_accs).mean()      # Combine accuracies
-    return {'Loss': epoch_loss.item(), 'Acc': epoch_acc.item()}
+    
+    # Combine all predictions and labels for distribution analysis
+    all_preds = torch.cat([x['Preds'] for x in outputs])
+    all_labels = torch.cat([x['Labels'] for x in outputs])
+    
+    # Calculate prediction distribution
+    num_classes = max(all_preds.max().item(), all_labels.max().item()) + 1
+    pred_dist = torch.bincount(all_preds, minlength=num_classes)
+    label_dist = torch.bincount(all_labels, minlength=num_classes)
+    
+    # Convert to percentages
+    pred_dist_pct = (pred_dist.float() / len(all_preds) * 100).tolist()
+    label_dist_pct = (label_dist.float() / len(all_labels) * 100).tolist()
+    
+    return {
+        'Loss': epoch_loss.item(), 
+        'Acc': epoch_acc.item(),
+        'Distribution': {
+            'predictions': pred_dist_pct,
+            'labels': label_dist_pct,
+            'pred_counts': pred_dist.tolist(),
+            'label_counts': label_dist.tolist()
+        }
+    }
 
 def epoch_end(model, epoch, result):
     print("Epoch [{}], last_lr: {:.5f}, train_loss: {:.4f}, val_loss: {:.4f}, val_acc: {:.4f}".format(
         epoch, result['lrs'][-1], result['train_loss'], result['Loss'], result['Acc']))
-
-
 
 @torch.no_grad()
 def evaluate(model, val_loader, device):

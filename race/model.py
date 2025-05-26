@@ -10,6 +10,7 @@ class AgeClassifier(nn.Module):
         self.base.fc = nn.Sequential(
             nn.Dropout(0.5),
             nn.Linear(num_features, num_classes),
+            nn.Softmax(dim=1)
         )
         
     def forward(self, x):

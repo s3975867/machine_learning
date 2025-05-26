@@ -7,32 +7,20 @@ import cv2
 import numpy as np
 import scipy.io
 import os
+import pandas as pd
 
 class IMDBDataset(Dataset):
-    def __init__(self, mat_file, root_dir, limit=None):
-        mat_data = scipy.io.loadmat(mat_file)
-        num_samples = len(mat_data["imdb"][0][0][0][0])
-
+    def __init__(self, csv_file, root_dir, limit=None):
+        df = pd.read_csv(csv_file)
+        
+        df = self._undersample_balanced(df, limit if limit else len(df))
+        
         self.root_dir = root_dir
-        self.num_samples = num_samples if limit == None else limit
+        self.num_samples = len(df)
 
-        self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                               std=[0.229, 0.224, 0.225])
-        ])
-
-        self.ages = np.zeros(self.num_samples, dtype=int)
-        self.img_paths = [None] * self.num_samples
-        self.celeb_ids = np.zeros(self.num_samples, dtype=int)
-
-        for i in range(self.num_samples):
-            dob = mat_data["imdb"][0][0][0][0][i]
-            photo_taken = mat_data["imdb"][0][0][1][0][i]
-            self.img_paths[i] = mat_data["imdb"][0][0][2][0][i][0]
-            self.celeb_ids[i] = mat_data["imdb"][0][0][9][0][i]
-            
-            self.ages[i] = photo_taken - dob // 365.25
+        self.img_paths = df['img_path'].tolist()
+        self.ages = df['age'].values
+        self.celeb_ids = df['celeb_id'].values
 
     def __len__(self):
         return self.num_samples
@@ -50,7 +38,34 @@ class IMDBDataset(Dataset):
         age_class = age_to_class(self.ages[idx])
         
         return img, age_class
+    
+    def _undersample_balanced(self, df, limit):
+        df['age_class'] = df['age'].apply(age_to_class)
         
+        celeb_counts = df.groupby('celeb_id').size()
+        
+        df = df.sort_values('celeb_id', key=lambda x: x.map(celeb_counts), ascending=False)
+        
+        class_sizes = df['age_class'].value_counts()
+        minority_size = class_sizes.min()
+        
+        if limit is None:
+            max_per_class = minority_size
+        else:
+            max_per_class = min(limit // 5, minority_size)
+        
+        result_df = df.groupby('age_class').head(max_per_class).reset_index(drop=True)
+        
+        print(f"Balanced dataset: {len(result_df)} samples across {len(result_df['age_class'].unique())} age classes")
+        print(f"Unique celebrities: {result_df['celeb_id'].nunique()}")
+        print("Class distribution:", result_df['age_class'].value_counts().sort_index().to_dict())
+        
+        return result_df
+
+def get_celeb_name(celeb_id):
+    mat_data = scipy.io.loadmat('./imdb_crop/imdb.mat')
+    return mat_data["imdb"][0][0][8][0][celeb_id]
+
 def age_to_class(age):
     if age <= 13:
         return 0
